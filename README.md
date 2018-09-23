@@ -13,6 +13,16 @@ Preparation
 =================
 See [3]
 
+Ensure, that Python 2.7 is used.
+
+Then, do 
+ - `export SDK_PATH=~/esp_iot_rtos_sdk`
+ - `export BIN_PATH=./output`
+
+In `$SDK_PATH/Makefile`: remove `-g` from `CCFLAGS`.
+
+In `$SDK_PATH/driver_lib/Makefile`: set `FLAVOR` to `release`.
+
 Build
 =================
 
