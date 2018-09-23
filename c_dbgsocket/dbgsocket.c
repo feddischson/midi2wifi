@@ -34,11 +34,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <netdb.h>
-#include <netinet/in.h>
 #include <string.h>
 #include <pthread.h>
-#include <sys/ioctl.h>
 #include <unistd.h>
+
+#include <netinet/in.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
 
 /** @brief Reads from a socket and dumps the result to stdout
  *  @param arg socket, must be cated to an int.
@@ -48,7 +51,7 @@ void read_and_dump( void* arg );
 /** @brief Creates server socket
  *  @param port_server The socket listening port
  * */
-void server_socket( int port_server );
+int server_socket( int port_server );
 
 
 /** @brief Opens a client socket and connects to a server
@@ -133,7 +136,7 @@ void client_socket( int port, char* host_ip )
    /* .. and connect it */
    memset(&host_addr, 0, sizeof(host_addr));
    host_addr.sin_family = AF_INET;
-   inet_aton( host_ip, &(host_addr.sin_addr.s_addr ) );
+   inet_aton( host_ip, &(host_addr.sin_addr) );
    host_addr.sin_port = htons(port);
    ret = connect(client_socket,
          (struct sockaddr*)&host_addr,
@@ -184,13 +187,14 @@ void client_socket( int port, char* host_ip )
 }
 
 
-void server_socket( int port_server )
+int server_socket( int port_server )
 {
    int sock_server;
    int sock_client;
    int size_addr_client;
    struct sockaddr_in addr_server;
    struct sockaddr_in addr_client;
+   int enable = 1;
 
    /* Create and bind the socket */
    sock_server = socket(AF_INET, SOCK_STREAM, 0);
@@ -198,6 +202,13 @@ void server_socket( int port_server )
       perror("ERROR opening socket");
       exit(1);
    }
+
+   if (setsockopt(sock_server, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int)) < 0)
+   {
+      perror("setsockopt(SO_REUSEADDR) failed");
+      exit(1);
+   }
+
    bzero((char *) &addr_server, sizeof(addr_server));
    addr_server.sin_family = AF_INET;
    addr_server.sin_addr.s_addr = INADDR_ANY;
