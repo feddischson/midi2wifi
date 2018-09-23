@@ -12,8 +12,8 @@
 #     a generated lib/image xxx.a ()
 #
 TARGET = eagle
-#FLAVOR = release
-FLAVOR = debug
+FLAVOR = release
+#FLAVOR = debug
 
 #EXTRA_CCFLAGS += -u
 
@@ -30,7 +30,6 @@ endif # } PDIR
 
 LDDIR = $(SDK_PATH)/ld
 
-CCFLAGS += -Os
 
 CCFLAGS += ${USER_DEFINES}
 
@@ -41,11 +40,13 @@ TARGET_LDFLAGS =		\
 	--text-section-literals
 
 ifeq ($(FLAVOR),debug)
-    TARGET_LDFLAGS += -g -O2
+	CCFLAGS += -g -O0
+    TARGET_LDFLAGS += -g -O0
 endif
 
 ifeq ($(FLAVOR),release)
-    TARGET_LDFLAGS += -g -O0
+	CCFLAGS += -O2
+    TARGET_LDFLAGS += -O2
 endif
 
 COMPONENTS_eagle.app.v6 = \
@@ -62,6 +63,7 @@ LINKFLAGS_eagle.app.v6 = \
     -u call_user_start	\
 	-Wl,-static						\
 	-Wl,--start-group					\
+	$(DEP_LIBS_eagle.app.v6)					\
 	-lcirom \
 	-lcrypto	\
 	-lespconn	\
@@ -83,7 +85,6 @@ LINKFLAGS_eagle.app.v6 = \
 	-lssl	\
 	-lwpa	\
 	-lwps		\
-	$(DEP_LIBS_eagle.app.v6)					\
 	-Wl,--end-group
 
 DEPENDS_eagle.app.v6 = \
