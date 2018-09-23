@@ -19,6 +19,8 @@
 #include "freertos/task.h"
 #include "lwip/sockets.h"
 
+#include "gpio.h"
+
 #include "midi2wifi/network_handler.h"
 #include "midi2wifi/global.h"
 #include "midi2wifi/logging.h"
@@ -30,39 +32,55 @@
  */
 void server_socket_task( void* param );
 
-/** @brief Socket read task.
+/** @brief TCP socket read task.
  *  @details
- *    Reads bytes from the socket and writes them into the rx_queue.
+ *    Reads bytes from the tcp socket and writes them into the rx_queue.
  *  @param param Needs to be casted to an int, holds the socket.
  */
-void socket_read_task( void* param );
+void socket_tcp_read_task( void* param );
 
-
-/** @brief Socket write task.
+/** @brief UDP socket read task.
  *  @details
- *    Reads bytes from the tx_queue and writes them into socket.
+ *    Reads bytes from the udp socket and writes them into the rx_queue.
  *  @param param Needs to be casted to an int, holds the socket.
  */
-void socket_write_task( void* param );
+void socket_udp_read_task( void* param );
+
+/** @brief TCP socket write task.
+ *  @details
+ *    Reads bytes from the tx_queue and writes them into tcp socket.
+ *  @param param Needs to be casted to an int, holds the socket.
+ */
+void socket_tcp_write_task( void* param );
+
+/** @brief TCP socket write task.
+ *  @details
+ *    Reads bytes from the tx_queue and writes them into tcp socket.
+ *  @param param Needs to be casted to an int, holds the socket.
+ */
+void socket_udp_write_task( void* param );
 
 
 /** @brief Private network data.
  */
 static struct _network_data_
 {
-   int                  socket;      /**< Initialized by init_server_socket */
+   int                  socket;      /**< Initialized by init_tcp_server_socket */
    struct sockaddr_in   addr_server; /**< Only used in host variant         */
+   struct sockaddr_in   addr_other;
+
    xQueueHandle         tx_queue;    /**< See global tx_queue               */
    xQueueHandle         rx_queue;    /**< See global rx_queue               */
 } network_data = {
    .socket = 0,
    .addr_server = {0},
+   .addr_other  = {0},
    .tx_queue    = 0,
    .rx_queue    = 0
 };
 
 
-int init_client_socket(
+int init_tcp_client_socket(
       char* host_ip,
       int host_port,
       xQueueHandle tx_queue,
@@ -108,16 +126,71 @@ int init_client_socket(
       return NETWORK_ERROR_CONNECT;
    }
 
-   os_printf("Connected ... starting read/write tasks\n");
    /* Start the read and write task */
-   xTaskCreate( socket_read_task,  (signed char *)"TCP-Server-Read",
-                  256, (void*)socket, 2, NULL);
-   xTaskCreate( socket_write_task, (signed char *)"TCP-Server-Write",
-                  256, (void*)socket, 2, NULL);
+   xTaskCreate( socket_tcp_read_task,  (signed char *)"TCP-Server-Read",
+                  256, (void*)socket, configMAX_PRIORITIES-2, NULL);
+   xTaskCreate( socket_tcp_write_task, (signed char *)"TCP-Server-Write",
+                  256, (void*)socket, configMAX_PRIORITIES-2, NULL);
 
+   return NETWORK_SUCCESS;
 }
 
-int init_server_socket(
+
+int init_udp_socket(
+      char* other_ip,
+      int port,
+      xQueueHandle tx_queue,
+      xQueueHandle rx_queue )
+{
+   network_data.tx_queue   = tx_queue;
+   network_data.rx_queue   = rx_queue;
+
+   /* Create the udp server socket ... */
+   network_data.socket = socket(AF_INET, SOCK_DGRAM, 0);
+   if (network_data.socket < 0)
+   {
+      return NETWORK_ERROR_SOCKET;
+   }
+
+
+   /* ... bind it ... */
+   memset( (char*)&network_data.addr_server,
+            0,
+            sizeof(network_data.addr_server));
+   network_data.addr_server.sin_family = AF_INET;
+   network_data.addr_server.sin_addr.s_addr = INADDR_ANY;
+   network_data.addr_server.sin_port = htons( port );
+
+
+   memset( (char*)&network_data.addr_other,
+            0,
+            sizeof(network_data.addr_other));
+   network_data.addr_other.sin_family = AF_INET;
+   network_data.addr_other.sin_port = htons( port );
+   network_data.addr_other.sin_addr.s_addr = INADDR_ANY;
+   inet_aton( other_ip, &(network_data.addr_other.sin_addr.s_addr ) );
+
+
+   /* ... bind it ... */
+   if ( bind( network_data.socket,
+            (struct sockaddr *) &network_data.addr_server,
+             sizeof(network_data.addr_server)) < 0 )
+   {
+      return NETWORK_ERROR_BIND;
+   }
+
+   /* ... and if succeeded, start the read and write task */
+   xTaskCreate( socket_udp_read_task,  (signed char *)"UDP-Read",
+                  256, (void*)network_data.socket, configMAX_PRIORITIES-2, NULL);
+   xTaskCreate( socket_udp_write_task, (signed char *)"UDP-Write",
+                  256, (void*)network_data.socket, configMAX_PRIORITIES-2, NULL);
+
+   return NETWORK_SUCCESS;
+}
+
+
+
+int init_tcp_server_socket(
       int host_port,
       xQueueHandle tx_queue,
       xQueueHandle rx_queue )
@@ -126,7 +199,7 @@ int init_server_socket(
    network_data.tx_queue   = tx_queue;
    network_data.rx_queue   = rx_queue;
 
-   /* Create the server socket ... */
+   /* Create the tcp server socket ... */
    network_data.socket = socket(AF_INET, SOCK_STREAM, 0);
    if (network_data.socket < 0)
    {
@@ -135,6 +208,9 @@ int init_server_socket(
 
 
    /* ... bind it ... */
+   memset( (char*)&network_data.addr_server,
+            0,
+            sizeof(network_data.addr_server));
    network_data.addr_server.sin_family = AF_INET;
    network_data.addr_server.sin_addr.s_addr = INADDR_ANY;
    network_data.addr_server.sin_port = htons( host_port );
@@ -156,7 +232,7 @@ int init_server_socket(
        * connections */
       xTaskCreate( server_socket_task,
                    (signed char *)"TCP-Server",
-                   256, NULL, 2, NULL );
+                   256, NULL, configMAX_PRIORITIES-3, NULL );
       return NETWORK_SUCCESS;
    }
 
@@ -186,16 +262,15 @@ void server_socket_task( void* param )
       }
 
       /* ... and if succeeded, start the read and write task */
-      xTaskCreate( socket_read_task,  (signed char *)"TCP-Server-Read",
-                     256, (void*)sock_client, 2, NULL);
-      xTaskCreate( socket_write_task, (signed char *)"TCP-Server-Write",
-                     256, (void*)sock_client, 2, NULL);
+      xTaskCreate( socket_tcp_read_task,  (signed char *)"TCP-Server-Read",
+                     256, (void*)sock_client, configMAX_PRIORITIES-2, NULL);
+      xTaskCreate( socket_tcp_write_task, (signed char *)"TCP-Server-Write",
+                     256, (void*)sock_client, configMAX_PRIORITIES-2, NULL);
 
    }
 }
 
-
-void socket_read_task( void* param )
+void socket_tcp_read_task( void* param )
 {
    int n;
    char buffer[NETWORK_SERVER_SOCKET_RX_BUF];
@@ -204,6 +279,7 @@ void socket_read_task( void* param )
    {
       int i;
       n = read(sock_client,buffer,NETWORK_SERVER_SOCKET_RX_BUF);
+      dbg_toggle();
       if( n == 0 )
       {
          close( sock_client );
@@ -213,13 +289,40 @@ void socket_read_task( void* param )
       {
          for( i=0; i < n; i++ )
          {
-            xQueueSend( network_data.rx_queue, &buffer[i], 100 );
+            xQueueSend( network_data.rx_queue, &buffer[i], portMAX_DELAY );
          }
       }
    }
 }
 
-void socket_write_task( void* param )
+void socket_udp_read_task( void* param )
+{
+   int n;
+   char buffer[NETWORK_SERVER_SOCKET_RX_BUF];
+   struct sockaddr_in si_other;
+   int sock = (int)(param);
+   int slen;
+   while(1)
+   {
+      int i;
+      n = recvfrom(sock, buffer, NETWORK_SERVER_SOCKET_RX_BUF, 0, (struct sockaddr *)&si_other, &slen );
+      dbg_toggle();
+      if( n == 0 )
+      {
+         close( sock );
+         vTaskSuspend( NULL );
+      }
+      else
+      {
+         for( i=0; i < n; i++ )
+         {
+            xQueueSend( network_data.rx_queue, &buffer[i], portMAX_DELAY );
+         }
+      }
+   }
+}
+
+void socket_tcp_write_task( void* param )
 {
    int n;
    uint8_t buf;
@@ -229,16 +332,41 @@ void socket_write_task( void* param )
       n = xQueueReceive(
             network_data.tx_queue,
             &buf,
-            10
+            portMAX_DELAY
             );
       if( n )
       {
-         //os_printf("[NET:Write] got %d bytes\n", n );
+         dbg_toggle();
          n = write( sock_client, &buf, 1 );
          if( n == -1 )
          {
             close( sock_client );
-            //os_printf("[NET:Write] suspend\n", n );
+            vTaskSuspend( NULL );
+         }
+      }
+   }
+}
+
+void socket_udp_write_task( void* param )
+{
+   int n;
+   uint8_t buf;
+   int sock = (int)(param);
+
+   while(1)
+   {
+      n = xQueueReceive(
+            network_data.tx_queue,
+            &buf,
+            portMAX_DELAY
+            );
+      if( n )
+      {
+         dbg_toggle();
+         n = sendto(sock, &buf, 1, 0, (struct sockaddr*) &network_data.addr_other, sizeof(network_data.addr_other));
+         if( n == -1 )
+         {
+            close( sock );
             vTaskSuspend( NULL );
          }
       }

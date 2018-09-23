@@ -95,19 +95,35 @@
   /** @brief The host ip address. */
   #define HOST_IP_ADDRESS    "192.168.222.219"
 
+  /** @brief The device ip address. */
+  #define DEVICE_IP_ADDRESS   "192.168.222.215"
+
   /** @brief The host's server socket port */
-  #define HOST_PORT          45678
+  #define MIDI2WIFI_PORT          45678
 
 #elif NETWORK_MODE==NETWORK_MODE_OWN
 
   /** @brief The host ip address. */
   #define HOST_IP_ADDRESS    "192.168.4.1"
 
+  /** @brief The device ip address. */
+  #define DEVICE_IP_ADDRESS   "192.168.4.2"
+
   /** @brief The host's server socket port */
-  #define HOST_PORT          45678
+  #define MIDI2WIFI_PORT          45678
 
 #endif
 
+/**
+ * @{ 
+ *   @brief Transport Layer definition and selection
+ */
+#define TRANSPORT_TCP 1
+#define TRANSPORT_UDP 2
+#define TRANSPORT TRANSPORT_UDP
+/** 
+ * @}
+ */
 
 #if MIDI_VARIANT==MIDI_VARIANT_HOST
    #define NAME         "MIDI2WIFI Adapter Host"

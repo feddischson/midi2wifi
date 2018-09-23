@@ -183,7 +183,7 @@ void uart_init( int uart_no,
    UART_intr_handler_register( uart_rx_handler, NULL);
    ETS_UART_INTR_ENABLE();
 
-   xTaskCreate( uart_task, (signed char *)"UART", 256, NULL, 2, NULL);
+   xTaskCreate( uart_task, (signed char *)"UART", 256, NULL, configMAX_PRIORITIES-1, NULL);
    uart_data.initialized = 1;
 }
 

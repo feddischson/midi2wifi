@@ -110,6 +110,16 @@ uint32_t user_rf_cal_sector_set( void )
     return rf_cal_sec;
 }
 
+/** 
+ * @brief Toggles GPIO2 for debugging purposes
+ */
+void dbg_toggle(void)
+{
+   GPIO_REG_WRITE(GPIO_OUT_W1TS_ADDRESS, 1<<2);
+   GPIO_REG_WRITE(GPIO_OUT_W1TC_ADDRESS, 1<<2);
+}
+
+
 #if ENABLE_GPIO_TOGGLE
 void GPIO_toggle_task (void *pvParameters)
 {
@@ -130,6 +140,7 @@ void GPIO_toggle_task (void *pvParameters)
 void station_connected_cb( void )
 {
    int res ;
+   os_printf("STATION_CONNECT_CB\n\n");
    #if ENABLE_NETWORK_LOGGING
    res = log_connect_dbg_socket( LOGGING_HOST, LOGGING_PORT, NAME );
 
@@ -154,11 +165,36 @@ void station_connected_cb( void )
    #endif
 
    #if MIDI_VARIANT==MIDI_VARIANT_DEVICE
-   init_client_socket(
-      HOST_IP_ADDRESS,
-      HOST_PORT,
-      tx_queue,
-      rx_queue );
+      #if TRANSPORT==TRANSPORT_TCP
+         init_tcp_client_socket(
+            HOST_IP_ADDRESS,
+            MIDI2WIFI_PORT,
+            tx_queue,
+            rx_queue );
+      #elif TRANSPORT==TRANSPORT_UDP
+         init_udp_socket(
+            HOST_IP_ADDRESS,
+            MIDI2WIFI_PORT,
+            tx_queue,
+            rx_queue );
+      #endif
+   #elif MIDI_VARIANT==MIDI_VARIANT_HOST
+      #if NETWORK_MODE==NETWORK_MODE_INFRASTRUCTURE
+         res = init_udp_socket(
+            DEVICE_IP_ADDRESS,
+            MIDI2WIFI_PORT,
+            tx_queue,
+            rx_queue );
+
+         if(  res == 0 )
+         {
+            os_printf("initialized server socket successfully\n");
+         }
+         else
+         {
+            os_printf("Failed to intialize server socket: %d\n", res );
+         }
+      #endif
    #endif
 }
 
@@ -170,45 +206,49 @@ void init_wifi( xQueueHandle tx_queue,
    init_esp_wifi();
 
    #if NETWORK_MODE==NETWORK_MODE_INFRASTRUCTURE
+   stop_wifi_ap();
+   start_wifi_station(
+      NETWORK_INFRASTRUCTURE_SSID,
+      NETWORK_INFRASTRUCTURE_PASS );
+   #elif NETWORK_MODE==NETWORK_MODE_OWN
+      #if MIDI_VARIANT==MIDI_VARIANT_HOST
+      stop_wifi_station();
+      start_wifi_ap(
+         MIDI2WIFI_SSID,
+         MIDI2WIFI_PASS
+            );
+      {
+         #if TRANSPORT == TRANSPORT_TCP
+         int res = init_tcp_server_socket(
+               MIDI2WIFI_PORT,
+               tx_queue,
+               rx_queue );
+         #elif TRANSPORT == TRANSPORT_UDP
+         int res = init_udp_socket(
+            DEVICE_IP_ADDRESS,
+            MIDI2WIFI_PORT,
+            tx_queue,
+            rx_queue );
+         #endif
+         if(  res == 0 )
+         {
+            os_printf("initialized server socket successfully\n");
+         }
+         else
+         {
+            os_printf("Failed to intialize server socket: %d\n", res );
+         }
+      }
+      #elif MIDI_VARIANT==MIDI_VARIANT_DEVICE
+      // conenct to own network
       stop_wifi_ap();
       start_wifi_station(
-         NETWORK_INFRASTRUCTURE_SSID,
-         NETWORK_INFRASTRUCTURE_PASS );
-   #elif NETWORK_MODE==NETWORK_MODE_OWN
-      // create or use own network
-      #if MIDI_VARIANT==MIDI_VARIANT_HOST
-         // create own network
-         stop_wifi_station();
-         start_wifi_ap(
-            MIDI2WIFI_SSID,
-            MIDI2WIFI_PASS
-               );
-      #elif MIDI_VARIANT==MIDI_VARIANT_DEVICE
-         // conenct to own network
-         stop_wifi_ap();
-         start_wifi_station(
-            MIDI2WIFI_SSID,
-            MIDI2WIFI_PASS
-               );
+         MIDI2WIFI_SSID,
+         MIDI2WIFI_PASS
+            );
       #endif
    #endif
 
-   #if MIDI_VARIANT==MIDI_VARIANT_HOST
-   {
-      int res = init_server_socket(
-            HOST_PORT,
-            tx_queue,
-            rx_queue );
-      if(  res == 0 )
-      {
-         os_printf("initialized server socket successfully\n");
-      }
-      else
-      {
-         os_printf("Failed to intialize server socket: %d\n", res );
-      }
-   }
-   #endif
 
 }
 
@@ -227,6 +267,8 @@ void user_init(void)
    tx_queue = xQueueCreate( RX_TX_QUEUE_SIZE, sizeof(portCHAR) );
    rx_queue = xQueueCreate( RX_TX_QUEUE_SIZE, sizeof(portCHAR) );
 
+
+
    uart_init( UART0, MIDI_UART_BAUD, tx_queue, rx_queue );
 
    #if !ENABLE_OS_PRINTF
@@ -235,9 +277,17 @@ void user_init(void)
 
    init_wifi( tx_queue, rx_queue );
 
+   /* 
+    * Set GPIO2 as output and to 0 (low)
+    */
+   PIN_FUNC_SELECT(PERIPHS_IO_MUX_MTDO_U, FUNC_GPIO2);
+   PIN_PULLUP_DIS(PERIPHS_IO_MUX_GPIO2_U);
+   gpio_output_set(0, BIT2, BIT2, 0);
+
    #if ENABLE_GPIO_TOGGLE
    xTaskCreate( GPIO_toggle_task, (signed char *)"Blink", 256, NULL, 2, NULL );
    #endif
+   log_to_network( "init done\n" );
 
    os_printf("init done\n");
 }

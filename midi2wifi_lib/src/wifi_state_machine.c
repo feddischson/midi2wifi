@@ -206,6 +206,7 @@ bool ICACHE_FLASH_ATTR start_wifi_ap(const char * ssid, const char * pass){
             return false;
         }
     }
+
     if(!ssid){
         os_printf("No SSID Given. Will start the AP saved in flash\n");
         return true;
@@ -218,6 +219,7 @@ bool ICACHE_FLASH_ATTR start_wifi_ap(const char * ssid, const char * pass){
     }
     config.max_connection = 1;
     config.authmode = AUTH_WPA2_PSK;
+    config.channel = 13;
     return wifi_softap_set_config(&config);
 }
 

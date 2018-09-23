@@ -35,7 +35,7 @@ int log_to_network( const char* format, ... );
 
 
 /** The log buffer size must be larger than the largest log-message */
-#define LOG_BUF_SIZE 32
+#define LOG_BUF_SIZE 128
 
 
 /** @{

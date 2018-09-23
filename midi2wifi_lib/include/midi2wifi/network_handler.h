@@ -28,8 +28,14 @@
  *  @param tx_queue  See global tx_queue.
  *  @param rx_queue  See global rx_queue.
  */
-int init_server_socket(
+int init_tcp_server_socket(
       int host_port,
+      xQueueHandle tx_queue,
+      xQueueHandle rx_queue );
+
+int init_udp_socket(
+      char* other_ip,
+      int port,
       xQueueHandle tx_queue,
       xQueueHandle rx_queue );
 
@@ -39,7 +45,7 @@ int init_server_socket(
  *  @param tx_queue  See global tx_queue.
  *  @param rx_queue  See global rx_queue.
  */
-int init_client_socket(
+int init_tcp_client_socket(
       char* host_ip,
       int host_port,
       xQueueHandle tx_queue,
