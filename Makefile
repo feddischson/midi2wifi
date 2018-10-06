@@ -22,15 +22,15 @@ GEN_IMAGES= eagle.app.v6.out
 GEN_BINS= eagle.app.v6.bin
 SPECIAL_MKTARGETS=$(APP_MKTARGETS)
 SUBDIRS=    \
-	user    \
 	${SDK_PATH}/driver_lib/driver \
-	midi2wifi_lib
+	user
 
 endif # } PDIR
 
-LDDIR = $(SDK_PATH)/ld
+APPDIR = .
+LDDIR = ${SDK_PATH}/ld
 
-
+CCFLAGS += -O2
 CCFLAGS += ${USER_DEFINES}
 
 TARGET_LDFLAGS =		\
@@ -40,51 +40,38 @@ TARGET_LDFLAGS =		\
 	--text-section-literals
 
 ifeq ($(FLAVOR),debug)
-	CCFLAGS += -g -O0
-    TARGET_LDFLAGS += -g -O0
+    TARGET_LDFLAGS += -g -O2
 endif
 
 ifeq ($(FLAVOR),release)
-	CCFLAGS += -O2
-    TARGET_LDFLAGS += -O2
+    TARGET_LDFLAGS += -g -O0
 endif
 
 COMPONENTS_eagle.app.v6 = \
-	user/libuser.a  \
 	${SDK_PATH}/driver_lib/driver/libdriver.a \
-	midi2wifi_lib/libmidi2wifi.a
+	user/libuser.a
 
 LINKFLAGS_eagle.app.v6 = \
-	-L$(SDK_PATH)/lib        \
-	-Wl,--gc-sections   \
+	-L${SDK_PATH}/lib        \
 	-nostdlib	\
     -T$(LD_FILE)   \
 	-Wl,--no-check-sections	\
+	-Wl,--gc-sections	\
     -u call_user_start	\
 	-Wl,-static						\
 	-Wl,--start-group					\
-	$(DEP_LIBS_eagle.app.v6)					\
-	-lcirom \
-	-lcrypto	\
-	-lespconn	\
-	-lespnow	\
-	-lfreertos	\
+	-lc					\
 	-lgcc					\
 	-lhal					\
-	-ljson	\
-	-llwip	\
-	-lmain	\
-	-lmirom	\
-	-lnet80211	\
-	-lnopoll	\
 	-lphy	\
 	-lpp	\
-	-lpwm	\
-	-lsmartconfig	\
-	-lspiffs	\
-	-lssl	\
+	-lnet80211	\
+	-llwip	\
 	-lwpa	\
-	-lwps		\
+	-lmain	\
+	-lespnow	\
+	-lcrypto	\
+	$(DEP_LIBS_eagle.app.v6)					\
 	-Wl,--end-group
 
 DEPENDS_eagle.app.v6 = \
@@ -128,7 +115,7 @@ DDEFINES +=				\
 # Required for each makefile to inherit from the parent
 #
 
-INCLUDES := $(INCLUDES) -I $(PDIR)include -I ${PDIR}midi2wifi_lib/include
+INCLUDES := $(INCLUDES) -I $(SDK_PATH)/include -I $(PDIR)include -I$(SDK_PATH)/driver_lib/include/
 sinclude $(SDK_PATH)/Makefile
 
 .PHONY: FORCE
