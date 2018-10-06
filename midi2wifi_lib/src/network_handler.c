@@ -279,7 +279,7 @@ void socket_tcp_read_task( void* param )
    {
       int i;
       n = read(sock_client,buffer,NETWORK_SERVER_SOCKET_RX_BUF);
-      dbg_toggle();
+      DEBUG_TOGGLE
       if( n == 0 )
       {
          close( sock_client );
@@ -306,7 +306,7 @@ void socket_udp_read_task( void* param )
    {
       int i;
       n = recvfrom(sock, buffer, NETWORK_SERVER_SOCKET_RX_BUF, 0, (struct sockaddr *)&si_other, &slen );
-      dbg_toggle();
+      DEBUG_TOGGLE
       if( n == 0 )
       {
          close( sock );
@@ -336,7 +336,7 @@ void socket_tcp_write_task( void* param )
             );
       if( n )
       {
-         dbg_toggle();
+         DEBUG_TOGGLE
          n = write( sock_client, &buf, 1 );
          if( n == -1 )
          {
@@ -362,7 +362,7 @@ void socket_udp_write_task( void* param )
             );
       if( n )
       {
-         dbg_toggle();
+         DEBUG_TOGGLE
          n = sendto(sock, &buf, 1, 0, (struct sockaddr*) &network_data.addr_other, sizeof(network_data.addr_other));
          if( n == -1 )
          {

@@ -78,10 +78,10 @@ void uart_task (void *param )
  */
 LOCAL void uart_rx_handler(void * param)
 {
+   DEBUG_TOGGLE
    uint8_t uart_no = uart_data.uart_no;
    uint8_t fifo_len = 0;
    uint8_t buf_idx = 0;
-   uint8_t fifo_tmp[128] = {0};
    uint8_t tmp;
    uint32_t uart_intr_status = READ_PERI_REG(UART_INT_ST(uart_no)) ;
    portBASE_TYPE xHigherPriorityTaskWoken = pdFALSE;
@@ -102,6 +102,7 @@ LOCAL void uart_rx_handler(void * param)
          while (buf_idx < fifo_len)
          {
             tmp = READ_PERI_REG(UART_FIFO(uart_no)) & 0xFF;
+            DEBUG_TOGGLE
             xQueueSendFromISR( uart_data.tx_queue,
                                &tmp,
                                &xHigherPriorityTaskWoken );
@@ -119,6 +120,7 @@ LOCAL void uart_rx_handler(void * param)
          while (buf_idx < fifo_len)
          {
             tmp = READ_PERI_REG(UART_FIFO(uart_no)) & 0xFF;
+            DEBUG_TOGGLE
             xQueueSendFromISR( uart_data.tx_queue,
                                &tmp,
                                &xHigherPriorityTaskWoken );

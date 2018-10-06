@@ -110,6 +110,7 @@ uint32_t user_rf_cal_sector_set( void )
     return rf_cal_sec;
 }
 
+
 /** 
  * @brief Toggles GPIO2 for debugging purposes
  */
@@ -118,7 +119,6 @@ void dbg_toggle(void)
    GPIO_REG_WRITE(GPIO_OUT_W1TS_ADDRESS, 1<<2);
    GPIO_REG_WRITE(GPIO_OUT_W1TC_ADDRESS, 1<<2);
 }
-
 
 #if ENABLE_GPIO_TOGGLE
 void GPIO_toggle_task (void *pvParameters)

@@ -138,5 +138,10 @@
 #define MIDI_UART_BAUD  31250
 //#define MIDI_UART_BAUD 9600
 
+extern void debug_toggle();
+//#define DEBUG_TOGGLE dbg_toggle();
+#define DEBUG_TOGGLE
+
+
 #endif /* GLOBAL_H */
 
