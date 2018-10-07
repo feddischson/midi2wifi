@@ -55,7 +55,7 @@ ISR(USART_RX_vect)
    while ( !(UCSRA & (1<<RXC)) )
       ;
    uint8_t tmp = UDR;
-   writeUSART(++tmp);
+   writeUSART(tmp);
 }
 
 void writeUSART(uint8_t data)

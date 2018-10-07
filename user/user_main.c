@@ -1,3 +1,19 @@
+/* ********************************************************************
+ *
+ *  Copyright (c) 2018 Christian Haettich [feddischson@gmail.com]
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ */
 #include <osapi.h>
 
 #include <driver/uart.h>
@@ -33,7 +49,7 @@ static void ICACHE_FLASH_ATTR udp_rx_cb(void *arg, char *pdata,
 static int8_t ICACHE_FLASH_ATTR udp_tx(uint8_t *data, uint16_t size);
 
 static void ICACHE_FLASH_ATTR user_printf(char c);
-static void ICACHE_FLASH_ATTR fatal_error(char* msg, uint32_t line);
+static void ICACHE_FLASH_ATTR fatal_error(char *msg, uint32_t line);
 
 void ICACHE_FLASH_ATTR user_init(void);
 
@@ -49,11 +65,23 @@ static inline void dbg_toggle(void) {
 
 #define FATAL_ERROR(_msg_) fatal_error(_msg_, __LINE__)
 
+#define MIDI_ST_INIT 0
+#define MIDI_ST_IDLE 1
+#define MIDI_ST_WAIT_D1 2
+#define MIDI_ST_WAIT_D2 3
+struct _midi_data {
+   uint8_t status;
+   uint8_t expected_data;
+   uint8_t message[3];
+} midi_data = {MIDI_ST_INIT, 0, {0}};
+static void midi_set_status(uint8_t status_byte);
+static void midi_set_d1(uint8_t data_byte);
+static void midi_set_d2(uint8_t data_byte);
+
 /* ********************************* */
 
-
 /** @brief Main entry point:
- *  @details Initializes 
+ *  @details Initializes
  *   - GPIO
  *   - UART (timer)
  *   - WIFI
@@ -84,8 +112,8 @@ void ICACHE_FLASH_ATTR user_init(void) {
    connected = 0;
    wifi_connect_to_ap(M2W_SSID, M2W_KEY);
 #endif
-   if( init_udp_rx() != 0 ){
-      FATAL_ERROR( "Failed to initialize UDP RX");
+   if (init_udp_rx() != 0) {
+      FATAL_ERROR("Failed to initialize UDP RX");
    }
 
    /* init timer */
@@ -104,10 +132,95 @@ static void ICACHE_FLASH_ATTR user_printf(char c) { /*nothing todo*/
  *  @details
  *    After a while, the watch dog will do a restart.
  */
-static void ICACHE_FLASH_ATTR fatal_error(char* msg, uint32_t line) {
+static void ICACHE_FLASH_ATTR fatal_error(char *msg, uint32_t line) {
    os_printf("fatal_error (%d):%s\n", line, msg);
    while (1)
       ;
+}
+
+/** @brief Sets MIDI status byte in internal structure
+ * */
+static void midi_set_status(uint8_t status_byte) {
+   if ((status_byte & 0xf0) == 0xC0 || (status_byte & 0xf0) == 0xD0 ||
+       (status_byte & 0xf0) == 0xF0) {
+      midi_data.expected_data = 1;
+   } else {
+      midi_data.expected_data = 2;
+   }
+
+   midi_data.message[0] = status_byte;
+   midi_data.status = MIDI_ST_WAIT_D1;
+}
+
+/** @brief Sets MIDI status data-byte 1 in internal structure
+ * */
+static void midi_set_d1(uint8_t data_byte) {
+   midi_data.message[1] = data_byte;
+   if (midi_data.expected_data == 1) {
+      DBG_TOGGLE;
+      udp_tx(midi_data.message, 2);
+      midi_data.status = MIDI_ST_IDLE;
+   } else {
+      midi_data.status = MIDI_ST_WAIT_D2;
+   }
+}
+
+/** @brief Sets MIDI status data-byte 2 in internal structure
+ * */
+static void midi_set_d2(uint8_t data_byte) {
+   midi_data.message[2] = data_byte;
+   DBG_TOGGLE;
+   udp_tx(midi_data.message, 3);
+   midi_data.status = MIDI_ST_IDLE;
+}
+
+/** @brief Process serial midi stream
+ * */
+uint8_t process_midi(uint8_t *data, uint16_t len) {
+   uint16_t i_byte;
+
+   for (i_byte = 0; i_byte < len; i_byte++) {
+      uint8_t byte = data[i_byte];
+
+      if (midi_data.status == MIDI_ST_INIT ||
+          midi_data.status == MIDI_ST_IDLE) {
+         /* If we receive a non-status byte ... */
+         if (byte & 0x80 == 0) {
+            if (midi_data.status == MIDI_ST_INIT) {
+               /* skip it in INIT-state
+                * because there is no 'last status'
+                */
+               continue;
+            } else {
+               /* take is as first data byte and re-use the old status byte*/
+               midi_set_d1(byte);
+               continue;
+            }
+         }
+         midi_set_status(byte);
+      }
+
+      else if (midi_data.status == MIDI_ST_WAIT_D1) {
+         if (byte & 0x80 == 1) {
+            /* If there is a nother status byte,
+             * use it and wait for the first data byte
+             */
+            midi_set_status(byte);
+            continue;
+         }
+         midi_set_d1(byte);
+
+      } else if (midi_data.status == MIDI_ST_WAIT_D2) {
+         if (byte & 0x80 == 1) {
+            /* If there is a status byte instead of a data byte,
+             * use it and wait for the first data byte
+             */
+            midi_set_status(byte);
+            continue;
+         }
+         midi_set_d2(byte);
+      }
+   }
 }
 
 /** @brief UART RX polling task.
@@ -120,12 +233,19 @@ static void ICACHE_FLASH_ATTR uart_rx_task() {
    uint16_t len = 0;
    os_timer_disarm(&uart_rx_poll_timer);
    len = rx_buff_deq(uart_buf, M2W_UART_BUF_SIZE);
+
+#if M2W_SKIP_MIDI_INTERPRETATION == 1
    if (len > 0 && connected) {
       DBG_TOGGLE;
-      if (udp_tx((uint8_t*)uart_buf, len) != 0) {
-         udp_tx((uint8_t*)uart_buf, len);
+      if (udp_tx((uint8_t *)uart_buf, len) != 0) {
+         udp_tx((uint8_t *)uart_buf, len);
       }
    }
+#else
+   if (len > 0 && connected) {
+      process_midi((uint8_t *)uart_buf, len);
+   }
+#endif
    os_timer_arm_us(&uart_rx_poll_timer, 4, 0);
 }
 
@@ -159,8 +279,8 @@ static void ICACHE_FLASH_ATTR wifi_init_ap(char *ssid, char *key,
 }
 
 /** @brief Is called for each wifi event
- *  @details 
- *   Is only used in the DEVICE variant, where the 
+ *  @details
+ *   Is only used in the DEVICE variant, where the
  *   connected flag is set and cleared.
  */
 static void ICACHE_FLASH_ATTR wifi_event_cb(System_Event_t *evt) {
@@ -169,8 +289,6 @@ static void ICACHE_FLASH_ATTR wifi_event_cb(System_Event_t *evt) {
       connected = 1;
    } else if (evt->event == EVENT_STAMODE_DISCONNECTED) {
       connected = 0;
-   } else {
-      os_printf("Event %d\n", evt->event);
    }
 #endif
 }
@@ -209,11 +327,11 @@ static int8_t ICACHE_FLASH_ATTR init_udp_rx(void) {
    udp1.local_port = M2W_UDP_PORT_1;
 #endif
    conn1.proto.udp = &udp1;
-   if( (err = espconn_create(&conn1)) != 0 ){
+   if ((err = espconn_create(&conn1)) != 0) {
       return err;
    }
 
-   if( (err = espconn_regist_recvcb(&conn1, &udp_rx_cb) ) != 0 ){
+   if ((err = espconn_regist_recvcb(&conn1, &udp_rx_cb)) != 0) {
       return err;
    }
    return 0;
@@ -267,7 +385,6 @@ static int8_t ICACHE_FLASH_ATTR udp_tx(uint8_t *data, uint16_t size) {
    }
    return 0;
 }
-
 
 /** @brief Required to reserve the rf cal sector */
 uint32_t ICACHE_FLASH_ATTR user_rf_cal_sector_set(void) {

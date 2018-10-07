@@ -22,6 +22,7 @@
  */
 #include <errno.h>
 #include <fcntl.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -39,13 +40,13 @@ void print_usage(void) {
    printf("       <baud>      Baud-rate of <dev>\n");
    printf("       <cnt>       Number of write/read iterations\n");
    printf("       <init>      Initial counter\n");
-   printf("       <blk_size>  Block size\n");
+   printf("       <blk_size>  Block size, 0 means random midi messages\n");
 }
 
 void setup_port(int fd, int baud, int parity);
 void setup_port_blocking(int fd, int blocking_state, int blk_size);
 double run_timing_test(int fd, int cnt, int init, int blk_size, int n_bin,
-                       double bin_size);
+                       double bin_size, int midi);
 void print_usage(void);
 void print_bin(int n, int bin_max, int size);
 
@@ -76,18 +77,52 @@ int main(int argc, char* argv[]) {
    setup_port(fd, baud, 0);
 
    printf("Opened %s @ %d\n", argv[1], baud);
-   result = run_timing_test(fd, cnt, init, blk_size, 5, 1.0000);
+   if (blk_size == 0) {
+      result = run_timing_test(fd, cnt, init, 3, 5, 1.0000, 1);
+   } else {
+      result = run_timing_test(fd, cnt, init, blk_size, 5, 1.0000, 0);
+   }
    printf("result: %f s\n", result / CLOCKS_PER_SEC);
 
    close(fd);
 }
 
+int create_random_midi(uint8_t* buf) {
+   buf[0] = (8 + (rand() % 8)) << 4;
+   if (buf[0] == 0xf0) {
+      buf[0] |= rand() % 8;
+      buf[1] = rand() & 0xff;
+      return 2;
+   } else if (buf[0] == 0xc0 || buf[0] == 0xd0) {
+      buf[0] |= rand() & 0xf;
+      buf[1] = rand() & 0xff;
+      return 2;
+   } else {
+      buf[0] |= rand() & 0xf;
+      buf[1] = rand() & 0xff;
+      buf[2] = rand() & 0xff;
+      return 3;
+   }
+   return 0;
+}
+
+void read_and_dump(int fd) {
+   char buf[256];
+   printf("\n\n");
+   setup_port_blocking(fd, 1, 1);
+   while (1) {
+      memset(buf, 0, 256);
+      int received = read(fd, buf, 256);
+      printf("%s", buf);
+   }
+}
+
 double run_timing_test(int fd, int cnt, int init, int blk_size, int n_bin,
-                       double bin_size) {
+                       double bin_size, int midi) {
    int i_iter;
    int i_bin;
-   char* buf_out;
-   char* buf_in;
+   uint8_t* buf_out;
+   uint8_t* buf_in;
    int fail_cnt = 0;
    double mean = 0.0;
    double* timing;
@@ -108,19 +143,19 @@ double run_timing_test(int fd, int cnt, int init, int blk_size, int n_bin,
       goto do_exit1;
    }
 
-   bins = (int*)malloc(n_bin * sizeof(int));
+   bins = (int*)malloc(n_bin_ds * sizeof(int));
    if (bins == 0) {
       perror("Failed to allocate memory for histogram.");
       goto do_exit2;
    }
 
-   buf_out = (char*)malloc(blk_size * sizeof(char));
+   buf_out = (uint8_t*)malloc(blk_size * sizeof(uint8_t));
    if (buf_out == 0) {
       perror("Failed to allocate memory for output buffer.");
       goto do_exit3;
    }
 
-   buf_in = (char*)malloc(blk_size * sizeof(char));
+   buf_in = (uint8_t*)malloc(blk_size * sizeof(uint8_t));
    if (buf_in == 0) {
       perror("Failed to allocate memory for input buffer.");
       goto do_exit4;
@@ -149,19 +184,27 @@ double run_timing_test(int fd, int cnt, int init, int blk_size, int n_bin,
       double result;
       struct timespec start = {0, 0};
       struct timespec stop = {0, 0};
+      int msg_len = blk_size;
+      int received = 0;
 
-      memset(buf_out, (char)((init + i_iter) & 0xff), blk_size);
+      if (midi) {
+         msg_len = create_random_midi(buf_out);
+      } else {
+         memset(buf_out, (char)((init + i_iter) & 0xff), blk_size);
+      }
 
       clock_gettime(CLOCK_MONOTONIC, &start);
-      write(fd, buf_out, blk_size);
-      if (blk_size != read(fd, buf_in, blk_size)) {
-         printf("Failed to read\n");
+      write(fd, buf_out, msg_len);
+      received = read(fd, buf_in, msg_len);
+      if (msg_len != received) {
+         printf("Failed to read %d != %d\n", received, msg_len);
          goto do_exit5;
       } else {
          clock_gettime(CLOCK_MONOTONIC, &stop);
       }
-      for (int i = 0; i < blk_size; i++) {
-         if (buf_in[i] != (buf_out[i] + 1)) {
+      for (int i = 0; i < msg_len; i++) {
+         if (buf_in[i] != (buf_out[i])) {
+            printf("%x - %x\n", buf_in[i], buf_out[i]);
             fail_cnt++;
          }
       }
@@ -232,7 +275,6 @@ double run_timing_test(int fd, int cnt, int init, int blk_size, int n_bin,
          }
       }
    }
-
    /* **********
     *
     *  print the histogram
@@ -259,6 +301,8 @@ double run_timing_test(int fd, int cnt, int init, int blk_size, int n_bin,
    print_bin(bins[n_bin_ds - 1], bin_max, HIST_WIDTH);
    printf("------------------\n");
 
+   free(buf_in);
+   free(buf_out);
    free(bins);
    free(timing);
    return mean;
@@ -266,16 +310,12 @@ double run_timing_test(int fd, int cnt, int init, int blk_size, int n_bin,
 do_exit6:
 do_exit5:
    free(buf_in);
-
 do_exit4:
    free(buf_out);
-
 do_exit3:
    free(bins);
-
 do_exit2:
    free(timing);
-
 do_exit1:
    exit(-1);
 }
