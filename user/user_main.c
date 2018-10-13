@@ -34,9 +34,6 @@ static struct espconn conn2;
 static esp_udp udp1;
 static esp_udp udp2;
 static uint8_t connected;
-static ETSTimer uart_rx_poll_timer;
-
-static void ICACHE_FLASH_ATTR uart_rx_task();
 
 static void ICACHE_FLASH_ATTR wifi_init_ap(char *ssid, char *key,
                                            uint8_t channel);
@@ -52,6 +49,8 @@ static void ICACHE_FLASH_ATTR user_printf(char c);
 static void ICACHE_FLASH_ATTR fatal_error(char *msg, uint32_t line);
 
 void ICACHE_FLASH_ATTR user_init(void);
+
+void ICACHE_FLASH_ATTR process_midi(uint8_t byte);
 
 static inline void dbg_toggle(void) {
    GPIO_REG_WRITE(GPIO_OUT_W1TS_ADDRESS, 1 << 2);
@@ -74,9 +73,97 @@ struct _midi_data {
    uint8_t expected_data;
    uint8_t message[3];
 } midi_data = {MIDI_ST_INIT, 0, {0}};
-static void midi_set_status(uint8_t status_byte);
-static void midi_set_d1(uint8_t data_byte);
-static void midi_set_d2(uint8_t data_byte);
+static void ICACHE_FLASH_ATTR midi_set_status(uint8_t status_byte);
+static void ICACHE_FLASH_ATTR midi_set_d1(uint8_t data_byte);
+static void ICACHE_FLASH_ATTR midi_set_d2(uint8_t data_byte);
+
+LOCAL void uart_rx_handler(void *param);
+
+LOCAL void ICACHE_FLASH_ATTR uart0_init(uint32_t baud) {
+   /* rcv_buff size if 0x100 */
+   uint8_t uart_no = UART0;
+   ETS_UART_INTR_ATTACH(uart_rx_handler, 0);
+   PIN_PULLUP_DIS(PERIPHS_IO_MUX_U0TXD_U);
+   PIN_FUNC_SELECT(PERIPHS_IO_MUX_U0TXD_U, FUNC_U0TXD);
+   uart_div_modify(uart_no, UART_CLK_FREQ / baud);
+   WRITE_PERI_REG(
+       UART_CONF0(uart_no),
+       ((STICK_PARITY_DIS & UART_PARITY_EN_M) << UART_PARITY_EN_S) |
+           (EVEN_BITS << UART_PARITY_S) | /* no parity (it seems there is
+                                             a bug within the driver API */
+           (ONE_STOP_BIT << UART_STOP_BIT_NUM_S) | /* one stop bit */
+           (EIGHT_BITS << UART_BIT_NUM_S));        /* 8 data bits */
+
+   /* clear rx and tx fifo,not ready */
+   SET_PERI_REG_MASK(UART_CONF0(uart_no),
+                     UART_RXFIFO_RST | UART_TXFIFO_RST); /* reset */
+   CLEAR_PERI_REG_MASK(UART_CONF0(uart_no), UART_RXFIFO_RST | UART_TXFIFO_RST);
+
+   /* set rx fifo trigger */
+   WRITE_PERI_REG(UART_CONF1(uart_no),
+                  ((100 & UART_RXFIFO_FULL_THRHD) << UART_RXFIFO_FULL_THRHD_S) |
+                      (0x02 & UART_RX_TOUT_THRHD) << UART_RX_TOUT_THRHD_S |
+                      UART_RX_TOUT_EN |
+                      ((0x10 & UART_TXFIFO_EMPTY_THRHD)
+                       << UART_TXFIFO_EMPTY_THRHD_S));  // wjl
+   SET_PERI_REG_MASK(UART_INT_ENA(uart_no),
+                     UART_RXFIFO_TOUT_INT_ENA | UART_FRM_ERR_INT_ENA);
+   /* clear all interrupt */
+   WRITE_PERI_REG(UART_INT_CLR(uart_no), 0xffff);
+   /* enable rx_interrupt */
+   SET_PERI_REG_MASK(UART_INT_ENA(uart_no),
+                     UART_RXFIFO_FULL_INT_ENA | UART_RXFIFO_OVF_INT_ENA);
+   ETS_UART_INTR_ENABLE();
+}
+
+
+/** @brief Local rx-handler, writes the received bytes into the tx_queue.
+ *  @details
+ *    Copied and adapted from uart.h
+ */
+LOCAL void uart_rx_handler(void *param) {
+   uint8_t uart_no = UART0;
+   uint8_t fifo_len = 0;
+   uint8_t buf_idx = 0;
+   uint8_t tmp;
+   uint32_t uart_intr_status = READ_PERI_REG(UART_INT_ST(uart_no));
+
+   while (uart_intr_status != 0x0) {
+      if (UART_FRM_ERR_INT_ST == (uart_intr_status & UART_FRM_ERR_INT_ST)) {
+         WRITE_PERI_REG(UART_INT_CLR(uart_no), UART_FRM_ERR_INT_CLR);
+      } else if (UART_RXFIFO_FULL_INT_ST ==
+                 (uart_intr_status & UART_RXFIFO_FULL_INT_ST)) {
+         fifo_len = (READ_PERI_REG(UART_STATUS(uart_no)) >> UART_RXFIFO_CNT_S) &
+                    UART_RXFIFO_CNT;
+         buf_idx = 0;
+
+         while (buf_idx < fifo_len) {
+            tmp = READ_PERI_REG(UART_FIFO(uart_no)) & 0xFF;
+            process_midi(tmp);
+            buf_idx++;
+         }
+         WRITE_PERI_REG(UART_INT_CLR(uart_no), UART_RXFIFO_FULL_INT_CLR);
+      } else if (UART_RXFIFO_TOUT_INT_ST ==
+                 (uart_intr_status & UART_RXFIFO_TOUT_INT_ST)) {
+         fifo_len = (READ_PERI_REG(UART_STATUS(uart_no)) >> UART_RXFIFO_CNT_S) &
+                    UART_RXFIFO_CNT;
+         buf_idx = 0;
+         while (buf_idx < fifo_len) {
+            tmp = READ_PERI_REG(UART_FIFO(uart_no)) & 0xFF;
+            process_midi(tmp);
+            buf_idx++;
+         }
+         WRITE_PERI_REG(UART_INT_CLR(uart_no), UART_RXFIFO_TOUT_INT_CLR);
+      } else if (UART_TXFIFO_EMPTY_INT_ST ==
+                 (uart_intr_status & UART_TXFIFO_EMPTY_INT_ST)) {
+         WRITE_PERI_REG(UART_INT_CLR(uart_no), UART_TXFIFO_EMPTY_INT_CLR);
+         CLEAR_PERI_REG_MASK(UART_INT_ENA(uart_no), UART_TXFIFO_EMPTY_INT_ENA);
+      } else {
+         // skip
+      }
+      uart_intr_status = READ_PERI_REG(UART_INT_ST(uart_no));
+   }
+}
 
 /* ********************************* */
 
@@ -99,8 +186,9 @@ void ICACHE_FLASH_ATTR user_init(void) {
    GPIO_REG_WRITE(GPIO_ENABLE_W1TS_ADDRESS, BIT2);
    GPIO_OUTPUT_SET(GPIO_ID_PIN(2), 0);
 
+   uart0_init(M2W_UART_BAUD);
+
    /* init UART */
-   uart_init(M2W_UART_BAUD, M2W_UART_BAUD);
 #if ENABLE_OS_PRINTF == 0
    os_install_putc1(user_printf);
 #endif
@@ -115,11 +203,6 @@ void ICACHE_FLASH_ATTR user_init(void) {
    if (init_udp_rx() != 0) {
       FATAL_ERROR("Failed to initialize UDP RX");
    }
-
-   /* init timer */
-   os_timer_disarm(&uart_rx_poll_timer);
-   os_timer_setfn(&uart_rx_poll_timer, (os_timer_func_t *)uart_rx_task, NULL);
-   os_timer_arm_us(&uart_rx_poll_timer, 4, 0);
 }
 
 /** @brief Dummy function to disable printing to uart
@@ -140,7 +223,7 @@ static void ICACHE_FLASH_ATTR fatal_error(char *msg, uint32_t line) {
 
 /** @brief Sets MIDI status byte in internal structure
  * */
-static void midi_set_status(uint8_t status_byte) {
+static void ICACHE_FLASH_ATTR midi_set_status(uint8_t status_byte) {
    if ((status_byte & 0xf0) == 0xC0 || (status_byte & 0xf0) == 0xD0 ||
        (status_byte & 0xf0) == 0xF0) {
       midi_data.expected_data = 1;
@@ -154,7 +237,7 @@ static void midi_set_status(uint8_t status_byte) {
 
 /** @brief Sets MIDI status data-byte 1 in internal structure
  * */
-static void midi_set_d1(uint8_t data_byte) {
+static void ICACHE_FLASH_ATTR midi_set_d1(uint8_t data_byte) {
    midi_data.message[1] = data_byte;
    if (midi_data.expected_data == 1) {
       DBG_TOGGLE;
@@ -167,7 +250,7 @@ static void midi_set_d1(uint8_t data_byte) {
 
 /** @brief Sets MIDI status data-byte 2 in internal structure
  * */
-static void midi_set_d2(uint8_t data_byte) {
+static void ICACHE_FLASH_ATTR midi_set_d2(uint8_t data_byte) {
    midi_data.message[2] = data_byte;
    DBG_TOGGLE;
    udp_tx(midi_data.message, 3);
@@ -176,77 +259,44 @@ static void midi_set_d2(uint8_t data_byte) {
 
 /** @brief Process serial midi stream
  * */
-uint8_t process_midi(uint8_t *data, uint16_t len) {
-   uint16_t i_byte;
-
-   for (i_byte = 0; i_byte < len; i_byte++) {
-      uint8_t byte = data[i_byte];
-
-      if (midi_data.status == MIDI_ST_INIT ||
-          midi_data.status == MIDI_ST_IDLE) {
-         /* If we receive a non-status byte ... */
-         if (byte & 0x80 == 0) {
-            if (midi_data.status == MIDI_ST_INIT) {
-               /* skip it in INIT-state
-                * because there is no 'last status'
-                */
-               continue;
-            } else {
-               /* take is as first data byte and re-use the old status byte*/
-               midi_set_d1(byte);
-               continue;
-            }
+void ICACHE_FLASH_ATTR process_midi(uint8_t byte) {
+   if (midi_data.status == MIDI_ST_INIT || midi_data.status == MIDI_ST_IDLE) {
+      /* If we receive a non-status byte ... */
+      if ((byte & 0x80) == 0) {
+         if (midi_data.status == MIDI_ST_INIT) {
+            /* skip it in INIT-state
+             * because there is no 'last status'
+             */
+            return;
+         } else {
+            /* take is as first data byte and re-use the old status byte*/
+            midi_set_d1(byte);
+            return;
          }
+      }
+      midi_set_status(byte);
+   }
+
+   else if (midi_data.status == MIDI_ST_WAIT_D1) {
+      if ((byte & 0x80) == 0x80) {
+         /* If there is a nother status byte,
+          * use it and wait for the first data byte
+          */
          midi_set_status(byte);
+         return;
       }
+      midi_set_d1(byte);
 
-      else if (midi_data.status == MIDI_ST_WAIT_D1) {
-         if (byte & 0x80 == 1) {
-            /* If there is a nother status byte,
-             * use it and wait for the first data byte
-             */
-            midi_set_status(byte);
-            continue;
-         }
-         midi_set_d1(byte);
-
-      } else if (midi_data.status == MIDI_ST_WAIT_D2) {
-         if (byte & 0x80 == 1) {
-            /* If there is a status byte instead of a data byte,
-             * use it and wait for the first data byte
-             */
-            midi_set_status(byte);
-            continue;
-         }
-         midi_set_d2(byte);
+   } else if (midi_data.status == MIDI_ST_WAIT_D2) {
+      if ((byte & 0x80) == 0x80) {
+         /* If there is a status byte instead of a data byte,
+          * use it and wait for the first data byte
+          */
+         midi_set_status(byte);
+         return;
       }
+      midi_set_d2(byte);
    }
-}
-
-/** @brief UART RX polling task.
- *  @details
- *   Polls the uart rx buffer via rx_buff_deq().
- *   If bytes are available, they are send via udp_tx().
- */
-static void ICACHE_FLASH_ATTR uart_rx_task() {
-   char uart_buf[M2W_UART_BUF_SIZE] = {0};
-   uint16_t len = 0;
-   os_timer_disarm(&uart_rx_poll_timer);
-   len = rx_buff_deq(uart_buf, M2W_UART_BUF_SIZE);
-
-#if M2W_SKIP_MIDI_INTERPRETATION == 1
-   if (len > 0 && connected) {
-      DBG_TOGGLE;
-      if (udp_tx((uint8_t *)uart_buf, len) != 0) {
-         udp_tx((uint8_t *)uart_buf, len);
-      }
-   }
-#else
-   if (len > 0 && connected) {
-      process_midi((uint8_t *)uart_buf, len);
-   }
-#endif
-   os_timer_arm_us(&uart_rx_poll_timer, 4, 0);
 }
 
 /** @brief Initializes the wifi access point

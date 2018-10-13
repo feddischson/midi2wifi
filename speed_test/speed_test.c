@@ -88,21 +88,28 @@ int main(int argc, char* argv[]) {
 }
 
 int create_random_midi(uint8_t* buf) {
+#if 1
    buf[0] = (8 + (rand() % 8)) << 4;
    if (buf[0] == 0xf0) {
       buf[0] |= rand() % 8;
-      buf[1] = rand() & 0xff;
+      buf[1] = rand() % 0x8;
       return 2;
    } else if (buf[0] == 0xc0 || buf[0] == 0xd0) {
       buf[0] |= rand() & 0xf;
-      buf[1] = rand() & 0xff;
+      buf[1] = rand() % 0x80;
       return 2;
    } else {
       buf[0] |= rand() & 0xf;
-      buf[1] = rand() & 0xff;
-      buf[2] = rand() & 0xff;
+      buf[1] = rand() % 0x80;
+      buf[2] = rand() % 0x80;
       return 3;
    }
+#else
+   buf[0] = 0x85;
+   buf[1] = 0x4f;
+   buf[2] = 0x73;
+   return 3;
+#endif
    return 0;
 }
 
@@ -192,6 +199,12 @@ double run_timing_test(int fd, int cnt, int init, int blk_size, int n_bin,
       } else {
          memset(buf_out, (char)((init + i_iter) & 0xff), blk_size);
       }
+
+#if 0
+      for(int i=0; i < msg_len; i++){
+         printf("%d->%x\n", i, buf_out[i]);
+      }
+#endif
 
       clock_gettime(CLOCK_MONOTONIC, &start);
       write(fd, buf_out, msg_len);

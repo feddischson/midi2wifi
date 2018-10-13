@@ -83,7 +83,6 @@
 /** @brief If set to 1, the SSID is hidden */
 #define M2W_HIDDEN_SSID 1
 
-#define M2W_SKIP_MIDI_INTERPRETATION 0
 
 /** @}  */
 
