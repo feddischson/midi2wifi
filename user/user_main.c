@@ -24,6 +24,7 @@
 #include <espconn.h>
 
 #include <user_interface.h>
+#include "midi.h"
 
 /* *********************************
  *    Function Prototypes
@@ -50,8 +51,6 @@ static void ICACHE_FLASH_ATTR fatal_error(char *msg, uint32_t line);
 
 void ICACHE_FLASH_ATTR user_init(void);
 
-void ICACHE_FLASH_ATTR process_midi(uint8_t byte);
-
 static inline void dbg_toggle(void) {
    GPIO_REG_WRITE(GPIO_OUT_W1TS_ADDRESS, 1 << 2);
    GPIO_REG_WRITE(GPIO_OUT_W1TC_ADDRESS, 1 << 2);
@@ -63,19 +62,6 @@ static inline void dbg_toggle(void) {
 #endif
 
 #define FATAL_ERROR(_msg_) fatal_error(_msg_, __LINE__)
-
-#define MIDI_ST_INIT 0
-#define MIDI_ST_IDLE 1
-#define MIDI_ST_WAIT_D1 2
-#define MIDI_ST_WAIT_D2 3
-struct _midi_data {
-   uint8_t status;
-   uint8_t expected_data;
-   uint8_t message[3];
-} midi_data = {MIDI_ST_INIT, 0, {0}};
-static void ICACHE_FLASH_ATTR midi_set_status(uint8_t status_byte);
-static void ICACHE_FLASH_ATTR midi_set_d1(uint8_t data_byte);
-static void ICACHE_FLASH_ATTR midi_set_d2(uint8_t data_byte);
 
 LOCAL void uart_rx_handler(void *param);
 
@@ -116,7 +102,6 @@ LOCAL void ICACHE_FLASH_ATTR uart0_init(uint32_t baud) {
    ETS_UART_INTR_ENABLE();
 }
 
-
 /** @brief Local rx-handler, writes the received bytes into the tx_queue.
  *  @details
  *    Copied and adapted from uart.h
@@ -139,7 +124,7 @@ LOCAL void uart_rx_handler(void *param) {
 
          while (buf_idx < fifo_len) {
             tmp = READ_PERI_REG(UART_FIFO(uart_no)) & 0xFF;
-            process_midi(tmp);
+            midi_add(tmp);
             buf_idx++;
          }
          WRITE_PERI_REG(UART_INT_CLR(uart_no), UART_RXFIFO_FULL_INT_CLR);
@@ -150,7 +135,7 @@ LOCAL void uart_rx_handler(void *param) {
          buf_idx = 0;
          while (buf_idx < fifo_len) {
             tmp = READ_PERI_REG(UART_FIFO(uart_no)) & 0xFF;
-            process_midi(tmp);
+            midi_add(tmp);
             buf_idx++;
          }
          WRITE_PERI_REG(UART_INT_CLR(uart_no), UART_RXFIFO_TOUT_INT_CLR);
@@ -186,9 +171,11 @@ void ICACHE_FLASH_ATTR user_init(void) {
    GPIO_REG_WRITE(GPIO_ENABLE_W1TS_ADDRESS, BIT2);
    GPIO_OUTPUT_SET(GPIO_ID_PIN(2), 0);
 
-   uart0_init(M2W_UART_BAUD);
+   /* init MIDI */
+   midi_init(&udp_tx);
 
    /* init UART */
+   uart0_init(M2W_UART_BAUD);
 #if ENABLE_OS_PRINTF == 0
    os_install_putc1(user_printf);
 #endif
@@ -219,84 +206,6 @@ static void ICACHE_FLASH_ATTR fatal_error(char *msg, uint32_t line) {
    os_printf("fatal_error (%d):%s\n", line, msg);
    while (1)
       ;
-}
-
-/** @brief Sets MIDI status byte in internal structure
- * */
-static void ICACHE_FLASH_ATTR midi_set_status(uint8_t status_byte) {
-   if ((status_byte & 0xf0) == 0xC0 || (status_byte & 0xf0) == 0xD0 ||
-       (status_byte & 0xf0) == 0xF0) {
-      midi_data.expected_data = 1;
-   } else {
-      midi_data.expected_data = 2;
-   }
-
-   midi_data.message[0] = status_byte;
-   midi_data.status = MIDI_ST_WAIT_D1;
-}
-
-/** @brief Sets MIDI status data-byte 1 in internal structure
- * */
-static void ICACHE_FLASH_ATTR midi_set_d1(uint8_t data_byte) {
-   midi_data.message[1] = data_byte;
-   if (midi_data.expected_data == 1) {
-      DBG_TOGGLE;
-      udp_tx(midi_data.message, 2);
-      midi_data.status = MIDI_ST_IDLE;
-   } else {
-      midi_data.status = MIDI_ST_WAIT_D2;
-   }
-}
-
-/** @brief Sets MIDI status data-byte 2 in internal structure
- * */
-static void ICACHE_FLASH_ATTR midi_set_d2(uint8_t data_byte) {
-   midi_data.message[2] = data_byte;
-   DBG_TOGGLE;
-   udp_tx(midi_data.message, 3);
-   midi_data.status = MIDI_ST_IDLE;
-}
-
-/** @brief Process serial midi stream
- * */
-void ICACHE_FLASH_ATTR process_midi(uint8_t byte) {
-   if (midi_data.status == MIDI_ST_INIT || midi_data.status == MIDI_ST_IDLE) {
-      /* If we receive a non-status byte ... */
-      if ((byte & 0x80) == 0) {
-         if (midi_data.status == MIDI_ST_INIT) {
-            /* skip it in INIT-state
-             * because there is no 'last status'
-             */
-            return;
-         } else {
-            /* take is as first data byte and re-use the old status byte*/
-            midi_set_d1(byte);
-            return;
-         }
-      }
-      midi_set_status(byte);
-   }
-
-   else if (midi_data.status == MIDI_ST_WAIT_D1) {
-      if ((byte & 0x80) == 0x80) {
-         /* If there is a nother status byte,
-          * use it and wait for the first data byte
-          */
-         midi_set_status(byte);
-         return;
-      }
-      midi_set_d1(byte);
-
-   } else if (midi_data.status == MIDI_ST_WAIT_D2) {
-      if ((byte & 0x80) == 0x80) {
-         /* If there is a status byte instead of a data byte,
-          * use it and wait for the first data byte
-          */
-         midi_set_status(byte);
-         return;
-      }
-      midi_set_d2(byte);
-   }
 }
 
 /** @brief Initializes the wifi access point
