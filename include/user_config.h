@@ -35,6 +35,7 @@
 #define M2W_VARIANT_DEVICE 1
 
 #ifndef M2W_VARIANT
+/** @brief The selected firmware variant (device or host). */
 #define M2W_VARIANT M2W_VARIANT_HOST
 #endif
 
@@ -44,18 +45,22 @@
 /**  @}  */
 
 #ifndef M2W_UART_BAUD
+/** @brief The midi-baudrate */
 #define M2W_UART_BAUD 31250
 #endif
 
 #ifndef M2W_SSID
+/** The Wifi SSID */
 #define M2W_SSID "MIDI2WIFI"
 #endif
 
 #ifndef M2W_KEY
+/** The Wifi PSK */
 #define M2W_KEY "ApX8t6H3ounXdckpKRo9fAtEqTwcWhu"
 #endif
 
 #ifndef M2W_WIFI_CHANNEL
+/** The Wifi Channel */
 #define M2W_WIFI_CHANNEL 13
 #endif
 
