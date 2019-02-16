@@ -86,7 +86,9 @@
 #define M2W_UART_BUF_SIZE 8
 
 /** @brief If set to 1, the SSID is hidden */
+#ifndef M2W_HIDDEN_SSID
 #define M2W_HIDDEN_SSID 1
+#endif
 
 /** @}  */
 
