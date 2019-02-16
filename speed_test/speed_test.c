@@ -41,7 +41,9 @@ void print_usage(void) {
    printf("       <cnt>       Number of write/read iterations\n");
    printf("       <init>      Initial counter\n");
    printf("       <blk_size>  Block size, 0 means random midi messages\n");
-   printf("       <sleepy>    Sleepy-value, 0 means no sleep, >0 sets the sleep value");
+   printf(
+       "       <sleepy>    Sleepy-value, 0 means no sleep, >0 sets the sleep "
+       "value");
 }
 
 void setup_port(int fd, int baud, int parity);
@@ -82,31 +84,56 @@ int main(int argc, char* argv[]) {
 
    printf("Opened %s @ %d\n", argv[1], baud);
    if (blk_size == 0) {
-      result = run_timing_test(fd, cnt, init, 3, 5, 1.0000, 1, sleepy);
-   } else {
-      result = run_timing_test(fd, cnt, init, blk_size, 5, 1.0000, 0, sleepy);
+      blk_size = 32;
    }
+   result = run_timing_test(fd, cnt, init, blk_size, 5, 1.0000, 0, sleepy);
    printf("result: %f s\n", result / CLOCKS_PER_SEC);
 
    close(fd);
 }
 
-int create_random_midi(uint8_t* buf) {
+int create_random_midi(uint8_t* buf, int blk_size) {
 #if 1
    buf[0] = (8 + (rand() % 8)) << 4;
+
    if (buf[0] == 0xf0) {
-      buf[0] |= rand() % 8;
-      buf[1] = rand() % 0x8;
-      return 2;
+      buf[0] |= rand() % 0xf;
+
+      /* create system exclusive mesage */
+      if (buf[0] == 0xf0 || buf[0] == 0xf7) {
+         buf[0] = 0xf0;
+         int i;
+         for (i = 1; i <= (blk_size-2); i++) {
+            buf[i] = rand() % 0x80;
+         }
+         buf[i] = 0xf7;
+         return i++;
+      /* time code and song select -> one data byte */
+      } else if (buf[0] == 0xf1 || buf[0] == 0xf3) {
+         buf[1] = rand() % 0x80;
+         return 2;
+      /* song position counter -> two data bytes */
+      } else if (buf[0] == 0xf2) {
+         buf[1] = rand() % 0x80;
+         buf[2] = rand() % 0x80;
+         return 3;
+      /* everything else is undefined or without data bytes */
+      } else {
+         return 1;
+      }
+
    } else if (buf[0] == 0xc0 || buf[0] == 0xd0) {
       buf[0] |= rand() & 0xf;
       buf[1] = rand() % 0x80;
-      return 2;
-   } else {
+      return 2;  // one data byte
+   } else if (buf[0] == 0x80 || buf[0] == 0x90 || buf[0] == 0xa0 ||
+              buf[0] == 0xb0 || buf[0] == 0xe0) {
       buf[0] |= rand() & 0xf;
       buf[1] = rand() % 0x80;
       buf[2] = rand() % 0x80;
-      return 3;
+      return 3;  // two data bytes
+   } else {
+      return 1;  // no data byte
    }
 #else
    buf[0] = 0x85;
@@ -199,7 +226,7 @@ double run_timing_test(int fd, int cnt, int init, int blk_size, int n_bin,
       int received = 0;
 
       if (rand_midi) {
-         msg_len = create_random_midi(buf_out);
+         msg_len = create_random_midi(buf_out, blk_size);
       } else {
          memset(buf_out, (char)((init + i_iter) & 0xff), blk_size);
       }

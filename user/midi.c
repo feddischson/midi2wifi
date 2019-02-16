@@ -22,14 +22,25 @@
 #define MIDI_ST_IDLE 1
 #define MIDI_ST_WAIT_D1 2
 #define MIDI_ST_WAIT_D2 3
+#define MIDI_ST_WAIT_F7 4
+
+/** @brief Size of the midi message buffer
+ *  @details
+ *    The buffer is larger than 3 bytes in order to handle
+ *    0xf0 xx xx xx xx xx xx 0xf7 messages, where there
+ *    is an unlimited number of xx bytes
+ *    (system exclusive messages).
+ */
+#define MIDI_MSG_BUF_SIZE 16
 
 struct _midi_data {
    uint8_t initialized;   /**< Init-flag: 1=struct is initialized */
    uint8_t state;         /**< Current processing state */
    uint8_t expected_data; /**< Length of the expected data */
-   uint8_t message[3];    /**< Message buffer */
-   midi_done_cb_t cb;     /**< Call-back function */
-} midi_data = {0, MIDI_ST_INIT, 0, {0}, 0};
+   uint8_t message[MIDI_MSG_BUF_SIZE]; /**< Message buffer */
+   uint16_t byte_cnt; /**< Counter for f0/f7 encapsulated messages */
+   midi_done_cb_t cb; /**< Call-back function */
+} midi_data = {0, MIDI_ST_INIT, 0, {0}, 0, 0};
 
 /** @brief Sets the first byte and updates the state */
 static void ICACHE_FLASH_ATTR midi_set_status(uint8_t status_byte);
@@ -41,11 +52,13 @@ static void ICACHE_FLASH_ATTR midi_set_d1(uint8_t data_byte);
 static void ICACHE_FLASH_ATTR midi_set_d2(uint8_t data_byte);
 
 void ICACHE_FLASH_ATTR midi_init(midi_done_cb_t cb) {
+   int i;
    midi_data.state = MIDI_ST_INIT;
    midi_data.expected_data = 0;
-   midi_data.message[0] = 0;
-   midi_data.message[1] = 0;
-   midi_data.message[2] = 0;
+   for (i = 0; i < MIDI_MSG_BUF_SIZE; i++) {
+      midi_data.message[i] = 0;
+   }
+   midi_data.byte_cnt = 0;
    midi_data.cb = cb;
    midi_data.initialized = 1;
 }
@@ -67,11 +80,10 @@ void ICACHE_FLASH_ATTR midi_add(uint8_t byte) {
             midi_set_d1(byte);
             return;
          }
+      } else {
+         midi_set_status(byte);
       }
-      midi_set_status(byte);
-   }
-
-   else if (midi_data.state == MIDI_ST_WAIT_D1) {
+   } else if (midi_data.state == MIDI_ST_WAIT_D1) {
       if ((byte & 0x80) == 0x80) {
          /* If there is a nother status byte,
           * use it and wait for the first data byte
@@ -90,19 +102,70 @@ void ICACHE_FLASH_ATTR midi_add(uint8_t byte) {
          return;
       }
       midi_set_d2(byte);
+   } else if (midi_data.state == MIDI_ST_WAIT_F7) {
+      midi_data.message[midi_data.byte_cnt] = byte;
+      midi_data.byte_cnt++;
+
+      if (byte == 0xf7) {
+         /* End of message -> send the buffer */
+         midi_data.cb(midi_data.message, midi_data.byte_cnt);
+         midi_data.state = MIDI_ST_IDLE;
+      } else {
+         /* Transmit the buffer if the buffer is full */
+         if (midi_data.byte_cnt >= MIDI_MSG_BUF_SIZE) {
+            midi_data.cb(midi_data.message, MIDI_MSG_BUF_SIZE);
+            midi_data.byte_cnt = 0;
+         }
+      }
    }
 }
 
 static void ICACHE_FLASH_ATTR midi_set_status(uint8_t status_byte) {
-   if ((status_byte & 0xf0) == 0xC0 || (status_byte & 0xf0) == 0xD0 ||
-       (status_byte & 0xf0) == 0xF0) {
+   /* Handle status bytes with one data byte */
+   if ((status_byte & 0xf0) == 0xC0 || /* Program Change */
+       (status_byte & 0xf0) == 0xd0 || /* Channel Preassure / After touch */
+       status_byte == 0xf1 ||          /* Time Code */
+       status_byte == 0xf3) {          /* Song Select */
       midi_data.expected_data = 1;
-   } else {
-      midi_data.expected_data = 2;
+      midi_data.message[0] = status_byte;
+      midi_data.state = MIDI_ST_WAIT_D1;
    }
-
-   midi_data.message[0] = status_byte;
-   midi_data.state = MIDI_ST_WAIT_D1;
+   /* Handle status bytes with no data bytes */
+   else if ((status_byte == 0xf4) || /* undefined */
+            (status_byte == 0xf5) || /* undefined */
+            (status_byte == 0xf6) || /* Tune Request */
+            (status_byte == 0xf8) || /* Timing Clock */
+            (status_byte == 0xf9) || /* Undefined */
+            (status_byte == 0xfa) || /* Start */
+            (status_byte == 0xfb) || /* Continue */
+            (status_byte == 0xfc) || /* Stop */
+            (status_byte == 0xfd) || /* Undefined */
+            (status_byte == 0xfe) || /* Active Sensing */
+            (status_byte == 0xff)) { /* System Reset */
+      midi_data.message[0] = status_byte;
+      midi_data.cb(midi_data.message, 1);
+      midi_data.state = MIDI_ST_IDLE;
+   }
+   /* Handle 0xf0 -> System Exclusive */
+   else if (status_byte == 0xf0) {
+      midi_data.expected_data = 0;
+      midi_data.message[0] = status_byte;
+      midi_data.state = MIDI_ST_WAIT_F7;
+      midi_data.byte_cnt = 1;
+   }
+   /* For all other cases, 2 data bytes are expected:
+    *   0x8n Note Off
+    *   0x9n Note on
+    *   0xan Poly Key Pressure
+    *   0xbn Control Change
+    *   0xen Pitch Bend Change
+    *   0xf2 Song Position Counter
+    * */
+   else {
+      midi_data.expected_data = 2;
+      midi_data.message[0] = status_byte;
+      midi_data.state = MIDI_ST_WAIT_D1;
+   }
 }
 
 static void ICACHE_FLASH_ATTR midi_set_d1(uint8_t data_byte) {
