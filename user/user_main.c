@@ -273,6 +273,7 @@ static void ICACHE_FLASH_ATTR wifi_connect_to_ap(char *ssid, char *key) {
    wifi_set_event_handler_cb(wifi_event_cb);
    wifi_station_set_auto_connect(true);
    wifi_set_opmode(STATION_MODE);
+   wifi_set_sleep_type(NONE_SLEEP_T);
 }
 
 /** @brief Initializes the UDP rx functionality */
