@@ -35,18 +35,19 @@
 
 void print_usage(void) {
    printf("Usage:\n");
-   printf("speed_test <dev> <baud> <cnt> <init>\n");
+   printf("speed_test <dev> <baud> <cnt> <init> <blk_size> <sleepy>\n");
    printf("       <dev>       Serial device\n");
    printf("       <baud>      Baud-rate of <dev>\n");
    printf("       <cnt>       Number of write/read iterations\n");
    printf("       <init>      Initial counter\n");
    printf("       <blk_size>  Block size, 0 means random midi messages\n");
+   printf("       <sleepy>    Sleepy-value, 0 means no sleep, >0 sets the sleep value");
 }
 
 void setup_port(int fd, int baud, int parity);
 void setup_port_blocking(int fd, int blocking_state, int blk_size);
 double run_timing_test(int fd, int cnt, int init, int blk_size, int n_bin,
-                       double bin_size, int midi);
+                       double bin_size, int rand_midi, int sleepy);
 void print_usage(void);
 void print_bin(int n, int bin_max, int size);
 
@@ -56,9 +57,10 @@ int main(int argc, char* argv[]) {
    int cnt;
    int init;
    int blk_size;
+   int sleepy;
    double result;
 
-   if (argc != 6) {
+   if (argc != 7) {
       printf("Error: Wrong number of arguments\n\n");
       print_usage();
       exit(-1);
@@ -74,13 +76,15 @@ int main(int argc, char* argv[]) {
    cnt = atoi(argv[3]);
    init = atoi(argv[4]);
    blk_size = atoi(argv[5]);
+   sleepy = atoi(argv[6]);
+
    setup_port(fd, baud, 0);
 
    printf("Opened %s @ %d\n", argv[1], baud);
    if (blk_size == 0) {
-      result = run_timing_test(fd, cnt, init, 3, 5, 1.0000, 1);
+      result = run_timing_test(fd, cnt, init, 3, 5, 1.0000, 1, sleepy);
    } else {
-      result = run_timing_test(fd, cnt, init, blk_size, 5, 1.0000, 0);
+      result = run_timing_test(fd, cnt, init, blk_size, 5, 1.0000, 0, sleepy);
    }
    printf("result: %f s\n", result / CLOCKS_PER_SEC);
 
@@ -119,13 +123,13 @@ void read_and_dump(int fd) {
    setup_port_blocking(fd, 1, 1);
    while (1) {
       memset(buf, 0, 256);
-      int received = read(fd, buf, 256);
+      read(fd, buf, 256);
       printf("%s", buf);
    }
 }
 
 double run_timing_test(int fd, int cnt, int init, int blk_size, int n_bin,
-                       double bin_size, int midi) {
+                       double bin_size, int rand_midi, int sleepy) {
    int i_iter;
    int i_bin;
    uint8_t* buf_out;
@@ -194,7 +198,7 @@ double run_timing_test(int fd, int cnt, int init, int blk_size, int n_bin,
       int msg_len = blk_size;
       int received = 0;
 
-      if (midi) {
+      if (rand_midi) {
          msg_len = create_random_midi(buf_out);
       } else {
          memset(buf_out, (char)((init + i_iter) & 0xff), blk_size);
@@ -227,6 +231,10 @@ double run_timing_test(int fd, int cnt, int init, int blk_size, int n_bin,
                (stop.tv_nsec - start.tv_nsec) / 1e6;
       timing[i_iter] = result;
       mean += result;
+
+      if (sleepy > 0) {
+         sleep(sleepy);
+      }
    }
    mean /= (double)cnt;
 
