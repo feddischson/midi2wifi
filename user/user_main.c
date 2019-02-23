@@ -234,7 +234,6 @@ static void ICACHE_FLASH_ATTR wifi_init_ap(char *ssid, char *key,
    apconf.ssid_len = os_strlen(ssid);
    apconf.channel = channel;
 
-   wifi_set_event_handler_cb(wifi_event_cb);
    wifi_softap_set_config(&apconf);
 }
 
@@ -248,15 +247,6 @@ static void ICACHE_FLASH_ATTR wifi_event_cb(System_Event_t *evt) {
    } else if (evt->event == EVENT_STAMODE_DISCONNECTED) {
       connected = 0;
 
-      /* Send all notes off via UART after disconnecting */
-      for (i = 0xb0; i <= 0xbf; i++) {
-         uart_tx_one_char(0, i);
-         uart_tx_one_char(0, 0x7b);
-         uart_tx_one_char(0, 0x0);
-      }
-   }
-#elif M2W_VARIANT == M2W_VARIANT_HOST
-   if (evt->event == EVENT_SOFTAPMODE_STADISCONNECTED) {
       /* Send all notes off via UART after disconnecting */
       for (i = 0xb0; i <= 0xbf; i++) {
          uart_tx_one_char(0, i);
