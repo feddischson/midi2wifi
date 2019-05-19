@@ -1,6 +1,6 @@
 /* ********************************************************************
  *
- *  Copyright (c) 2018 Christian Haettich [feddischson@gmail.com]
+ *  Copyright (c) 2019 Christian Haettich [feddischson@gmail.com]
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@
 #include <ip_addr.h>
 /* must be after id_addr.h */
 #include <espconn.h>
+#include <time.h>
 
 #include <user_interface.h>
 #include "midi.h"
@@ -50,6 +51,19 @@ static void ICACHE_FLASH_ATTR user_printf(char c);
 static void ICACHE_FLASH_ATTR fatal_error(char *msg, uint32_t line);
 
 void ICACHE_FLASH_ATTR user_init(void);
+
+void ICACHE_FLASH_ATTR show_disconnected(void);
+
+static inline void rx_tx_toggle(void) {
+   static int state = 0;
+   if (state) {
+      state = 0;
+      GPIO_OUTPUT_SET(GPIO_ID_PIN(2), 0);
+   } else {
+      state = 1;
+      GPIO_OUTPUT_SET(GPIO_ID_PIN(2), 1);
+   }
+}
 
 static inline void dbg_toggle(void) {
    GPIO_REG_WRITE(GPIO_OUT_W1TS_ADDRESS, 1 << 2);
@@ -124,7 +138,7 @@ LOCAL void uart_rx_handler(void *param) {
 
          while (buf_idx < fifo_len) {
             tmp = READ_PERI_REG(UART_FIFO(uart_no)) & 0xFF;
-            midi_add(tmp);
+            midi_add(tmp, buf_idx != (fifo_len - 1));
             buf_idx++;
          }
          WRITE_PERI_REG(UART_INT_CLR(uart_no), UART_RXFIFO_FULL_INT_CLR);
@@ -135,7 +149,7 @@ LOCAL void uart_rx_handler(void *param) {
          buf_idx = 0;
          while (buf_idx < fifo_len) {
             tmp = READ_PERI_REG(UART_FIFO(uart_no)) & 0xFF;
-            midi_add(tmp);
+            midi_add(tmp, buf_idx != (fifo_len - 1));
             buf_idx++;
          }
          WRITE_PERI_REG(UART_INT_CLR(uart_no), UART_RXFIFO_TOUT_INT_CLR);
@@ -162,15 +176,6 @@ void ICACHE_FLASH_ATTR user_init(void) {
    /* re-init system timer to get us timers */
    system_timer_reinit();
 
-   /* init the gpio driver
-    * and set GPIO2 as output and to 0 (low)
-    */
-   gpio_init();
-   PIN_FUNC_SELECT(PERIPHS_IO_MUX_GPIO2_U, FUNC_GPIO2);
-   PIN_PULLUP_DIS(PERIPHS_IO_MUX_GPIO2_U);
-   GPIO_REG_WRITE(GPIO_ENABLE_W1TS_ADDRESS, BIT2);
-   GPIO_OUTPUT_SET(GPIO_ID_PIN(2), 0);
-
    /* init MIDI */
    midi_init(&udp_tx);
 
@@ -179,6 +184,17 @@ void ICACHE_FLASH_ATTR user_init(void) {
 #if ENABLE_OS_PRINTF == 0
    os_install_putc1(user_printf);
 #endif
+
+   gpio_init();
+   PIN_FUNC_SELECT(PERIPHS_IO_MUX_GPIO2_U, FUNC_GPIO2);
+   PIN_PULLUP_DIS(PERIPHS_IO_MUX_GPIO2_U);
+   GPIO_REG_WRITE(GPIO_ENABLE_W1TS_ADDRESS, BIT2);
+
+   PIN_FUNC_SELECT(PERIPHS_IO_MUX_GPIO0_U, FUNC_GPIO0);
+   PIN_PULLUP_DIS(PERIPHS_IO_MUX_GPIO0_U);
+   GPIO_REG_WRITE(GPIO_ENABLE_W1TS_ADDRESS, BIT0);
+
+   show_disconnected();
 
 #if M2W_VARIANT == M2W_VARIANT_HOST
    connected = 1;
@@ -190,6 +206,12 @@ void ICACHE_FLASH_ATTR user_init(void) {
    if (init_udp_rx() != 0) {
       FATAL_ERROR("Failed to initialize UDP RX");
    }
+}
+
+void show_connected(void) { GPIO_OUTPUT_SET(GPIO_ID_PIN(0), 0); }
+
+void ICACHE_FLASH_ATTR show_disconnected(void) {
+   GPIO_OUTPUT_SET(GPIO_ID_PIN(0), 1);
 }
 
 /** @brief Dummy function to disable printing to uart
@@ -235,23 +257,35 @@ static void ICACHE_FLASH_ATTR wifi_init_ap(char *ssid, char *key,
    apconf.channel = channel;
 
    wifi_softap_set_config(&apconf);
+   wifi_set_event_handler_cb(wifi_event_cb);
 }
 
 /** @brief Is called for each wifi event
  */
 static void ICACHE_FLASH_ATTR wifi_event_cb(System_Event_t *evt) {
    int i;
+#if M2W_VARIANT == M2W_VARIANT_HOST
+   if (evt->event == EVENT_SOFTAPMODE_STACONNECTED) {
+      show_connected();
+   } else if (evt->event == EVENT_SOFTAPMODE_STADISCONNECTED) {
+      show_disconnected();
+   }
+#endif
+
 #if M2W_VARIANT == M2W_VARIANT_DEVICE
    if (evt->event == EVENT_STAMODE_GOT_IP) {
       connected = 1;
+      show_connected();
    } else if (evt->event == EVENT_STAMODE_DISCONNECTED) {
-      connected = 0;
-
-      /* Send all notes off via UART after disconnecting */
-      for (i = 0xb0; i <= 0xbf; i++) {
-         uart_tx_one_char(0, i);
-         uart_tx_one_char(0, 0x7b);
-         uart_tx_one_char(0, 0x0);
+      if (connected) {
+         connected = 0;
+         show_disconnected();
+         /* Send all notes off via UART after disconnecting */
+         for (i = 0xb0; i <= 0xbf; i++) {
+            uart_tx_one_char(0, i);
+            uart_tx_one_char(0, 0x7b);
+            uart_tx_one_char(0, 0x0);
+         }
       }
    }
 #endif
@@ -310,6 +344,7 @@ static void ICACHE_FLASH_ATTR udp_rx_cb(void *arg, char *pdata,
    for (i = 0; i < len; i++) {
       uart_tx_one_char(0, pdata[i]);
    }
+   rx_tx_toggle();
 }
 
 /** @brief The UDP TX function
@@ -348,6 +383,7 @@ static int8_t ICACHE_FLASH_ATTR udp_tx(uint8_t *data, uint16_t size) {
       /* if something != 0 is returned -> fatal-error */
       FATAL_ERROR("did not expect a return value other than 0");
    }
+   rx_tx_toggle();
    return 0;
 }
 

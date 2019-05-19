@@ -1,6 +1,6 @@
 /* ********************************************************************
  *
- *  Copyright (c) 2018 Christian Haettich [feddischson@gmail.com]
+ *  Copyright (c) 2019 Christian Haettich [feddischson@gmail.com]
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -24,7 +24,7 @@
 typedef int8_t (*midi_done_cb_t)(uint8_t *data, uint16_t len);
 
 /** @brief Adds and processes one byte */
-void ICACHE_FLASH_ATTR midi_add(uint8_t byte);
+void ICACHE_FLASH_ATTR midi_add(uint8_t byte, uint8_t bytes_pending);
 
 /** @brief Initializes the internal midi structure. */
 void ICACHE_FLASH_ATTR midi_init(midi_done_cb_t cb);
